@@ -50,7 +50,7 @@ op:option{'--filtSizes', action='store', dest='filtSizes',
 op:option{'--filtStrides', action='store', dest='filtStrides',
           help='Convolution Filter sizes', default='{1, 1, 1, 1}'}
 op:option{'--poolSizes', action='store', dest='poolSizes',
-          help='Pooling sizes', default='{3, 3, 3, 3}'}
+          help='Pooling sizes', default='{2, 2, 2, 2}'}
 op:option{'--poolStrides', action='store', dest='poolStrides',
           help='Pooling strides', default='{2, 2, 2, 2}'}
 op:option{'--useBatchNorm', action='store_true', dest='useBatchNorm',
@@ -181,6 +181,9 @@ model:add(nn.Linear(featMaps[#featMaps]*rHeight*rWidth, nHiddens))
 model:add(nn.Linear(nHiddens, iheight*iwidth))
 model:add(nn.Reshape(1, iheight, iwidth))
 
+-- Resize to input image size
+model:add(nn.SpatialScaling{oheight=height, owidth=width})
+
 -- Criterion SpatialBinaryLogisticRegression
 criterion = nn.SpatialBinaryLogisticRegression()
 
@@ -230,3 +233,5 @@ previous_train_accu = 0
 best_train_model = nn.Sequential()
 times = torch.Tensor(epochs)
 earlyStopCount = 0
+
+print(model)
