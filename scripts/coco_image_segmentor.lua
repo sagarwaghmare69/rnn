@@ -235,3 +235,13 @@ times = torch.Tensor(epochs)
 earlyStopCount = 0
 
 print(model)
+
+-- Sample forward
+trainInputs = batch:cuda()
+trainTargets = torch.rand(32, 1, height, width)
+trainTargets = trainTargets:cuda()
+outputs = model:forward(trainInputs)
+f = criterion:forward(outputs, trainTargets)
+
+df_do = criterion:backward(outputs, trainTargets)
+model:backward(trainInputs, df_do)
