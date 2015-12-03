@@ -33,12 +33,16 @@ op:option{'-d', '--datadir', action='store', dest='datadir',
           help='path to datadir', default=""}
 op:option{'-o', '--outdir', action='store', dest='outdir',
           help='path to outdir', default=""}
-op:option{'--height', action='store', dest='height', help='height',default=256}
-op:option{'--width', action='store', dest='width', help='height',default=304}
+op:option{'--height', action='store', dest='height', help='height',default=224}
+op:option{'--width', action='store', dest='width', help='height',default=224}
+op:option{'--crop', action='store_true', dest='crop',
+          help='Crop heightxwidth from the input image.', default=false}
 op:option{'--noOfTrainSamples', action='store', dest='noOfTrainSamples',
-          help='Number of train samples.', default=28000000}
+          help='Number of train samples.', default=2391476}
 op:option{'--noOfValidSamples', action='store', dest='noOfValidSamples',
-          help='Number of train samples.', default=16000000}
+          help='Number of train samples.', default=1153660}
+op:option{'--maxFnLen', action='store', dest='maxFnLen',
+          help='Max filename length.', default=150}
 
 -- Model
 op:option{'--dropOuts', action='store', dest='dropOuts',
@@ -92,17 +96,113 @@ op:summarize()
 
 datadir = opt.datadir
 outdir = opt.outdir
-height = tonumber(opt.height)
-width = tonumber(opt.width)
+cropHeight = tonumber(opt.height)
+cropWidth = tonumber(opt.width)
+crop = opt.crop
 noOfTrainSamples = tonumber(opt.noOfTrainSamples)
 noOfValidSamples = tonumber(opt.noOfValidSamples)
+maxFnLen = tonumber(opt.maxFnLen)
+
+-- Data directories
+trainImagesDir = paths.concat(datadir, "train/images")
+trainMasksDir = paths.concat(datadir, "train/masks")
+
+validImagesDir = paths.concat(datadir, "valid/images")
+validMasksDir = paths.concat(datadir, "valid/masks")
+
+trainSamplesDictFile = paths.concat(outdir, "trainSamplesDict.t7")
+validSamplesDictFile = paths.concat(outdir, "validSamplesDict.t7")
+trainTargetsDictFile = paths.concat(outdir, "trainTargetsDict.t7")
+validTargetsDictFile = paths.concat(outdir, "validTargetsDict.t7")
+
+if paths.filep(trainSamplesDictFile) 
+   and paths.filep(validSamplesDictFile)
+   and paths.filep(trainTargetsDictFile)
+   and paths.filep(validTargetsDictFile) then
+   print("Loading training samples dictionary")
+   trainSamplesDict = torch.load(trainSamplesDictFile)
+   trainTargetsDict = torch.load(trainTargetsDictFile)
+   print("Loading validation samples dictionary")
+   validSamplesDict = torch.load(validSamplesDictFile)
+   validTargetsDict = torch.load(validTargetsDictFile)
+else
+   print("Generating training dictionary")
+   trainSamplesDict = torch.CharTensor(noOfTrainSamples, maxFnLen)
+   trainSamplesPtr = torch.data(trainSamplesDict)
+   trainTargetsDict = torch.CharTensor(noOfTrainSamples, maxFnLen)
+   trainTargetsPtr = torch.data(trainTargetsDict)
+
+   indx = 1
+   for fp in lfs.dir(trainImagesDir) do
+      startIndx, endIndx = fp:find('.jpg')
+      if startIndx ~= nil then
+         -- images
+         fpSample = paths.concat(trainImagesDir, fp)
+         ffi.copy(trainSamplesPtr + ((indx-1)*maxFnLen), fpSample)
+
+         -- masks
+         fpTarget = paths.concat(trainMasksDir, fp)
+         ffi.copy(trainTargetsPtr + ((indx-1)*maxFnLen), fpTarget)
+
+         indx = indx + 1
+      end
+   end
+   trainSamplesDict = trainSamplesDict[{{1, indx-1}}]
+   trainTargetsDict = trainTargetsDict[{{1, indx-1}}]
+
+   print("Generating validation dictionary")
+   validSamplesDict = torch.CharTensor(noOfValidSamples, maxFnLen)
+   validSamplesPtr = torch.data(validSamplesDict)
+   validTargetsDict = torch.CharTensor(noOfValidSamples, maxFnLen)
+   validTargetsPtr = torch.data(validTargetsDict)
+
+   indx = 1
+   for fp in lfs.dir(validImagesDir) do
+      startIndx, endIndx = fp:find('.jpg')
+      if startIndx ~= nil then
+         -- images
+         fpSample = paths.concat(validImagesDir, fp)
+         ffi.copy(validSamplesPtr + ((indx-1)*maxFnLen), fpSample)
+
+         -- masks
+         fpTarget = paths.concat(validMasksDir, fp)
+         ffi.copy(validTargetsPtr + ((indx-1)*maxFnLen), fpTarget)
+
+         indx = indx + 1
+      end
+   end
+   validSamplesDict = validSamplesDict[{{1, indx-1}}]
+   validTargetsDict = validTargetsDict[{{1, indx-1}}]
+
+   -- Saving to disk
+   torch.save(trainSamplesDictFile, trainSamplesDict)
+   torch.save(validSamplesDictFile, validSamplesDict)
+   torch.save(trainTargetsDictFile, trainTargetsDict)
+   torch.save(validTargetsDictFile, validTargetsDict)
+end
+
+-- Training Data
+trainData = {}
+trainData.samples = trainSamplesDict
+trainData.labels = trainTargetsDict
+trainData.size = function() return trainData.labels:size()[1] end
+
+-- Validation Data
+validData = {}
+validData.samples = validSamplesDict
+validData.labels = validTargetsDict
+validData.size = function() return validData.labels:size()[1] end
 
 -- Input features
-nFeats = 3
-height = 224 
-width = 224
+-- Model
+sample = image.load(ffi.string(torch.data(trainSamplesDict[1])))
+sampleSize = sample:size()
+label = image.load(ffi.string(torch.data(trainTargetsDict[1])))
+labelSize = label:size()
 
-batch = torch.rand(32, nFeats, height, width)
+nFeats = sample:size(1)
+height = sample:size(2)
+width = sample:size(3)
 
 -- Model
 classes = {'Background', 'Foreground'}
@@ -123,6 +223,11 @@ useCuda = opt.useCuda
 deviceId = tonumber(opt.deviceId)
 
 model = nn.Sequential()
+if crop then
+   preprocessor = nn.Sequential()
+   preprocessor:add(nn.SpatialUniformCrop(cropHeight, cropWidth))
+end
+
 usingPooling = false
 for key, value in pairs(featMaps) do
    if key == 1 then
@@ -160,10 +265,21 @@ for key, value in pairs(featMaps) do
    model:add(nn[nonLinearity]())
 end
 
-tempOp = model:forward(batch)
-opFeats = tempOp:size(2)
-rHeight = tempOp:size(3)
-rWidth = tempOp:size(4)
+if batchNorm then
+   sample:resize(1, nFeats, height, width)
+end
+
+if crop then sample = preprocessor:forward(sample) end
+tempOp = model:forward(sample)
+if batchNorm then
+   opFeats = tempOp:size(2)
+   rHeight = tempOp:size(3)
+   rWidth = tempOp:size(4)
+else
+   opFeats = tempOp:size(1)
+   rHeight = tempOp:size(2)
+   rWidth = tempOp:size(3)
+end
 
 -- Recurrent layer
 l = nn.Sequential()
@@ -182,7 +298,7 @@ model:add(nn.Linear(nHiddens, iheight*iwidth))
 model:add(nn.Reshape(1, iheight, iwidth))
 
 -- Resize to input image size
-model:add(nn.SpatialScaling{oheight=height, owidth=width})
+model:add(nn.SpatialScaling{oheight=cropHeight, owidth=cropWidth})
 
 -- Criterion SpatialBinaryLogisticRegression
 criterion = nn.SpatialBinaryLogisticRegression()
@@ -191,6 +307,7 @@ if useCuda then
    print("Using GPU:"..deviceId)
    cutorch.setDevice(deviceId)
    print("GPU set")
+   preprocessor:cuda()
    model:cuda()
    print("Model copied to CUDA")
    criterion:cuda()
@@ -224,8 +341,9 @@ optimMethod = optim.sgd
 print(optimState)
 
 displayProgress = true
-imageLevel = false
-bceThresh = 0.5
+imageLevel = true
+useBce = true
+bceThresh = 0
 best_test_accu = 0
 best_test_model = nn.Sequential()
 best_train_accu = 0
@@ -236,12 +354,38 @@ earlyStopCount = 0
 
 print(model)
 
--- Sample forward
-trainInputs = batch:cuda()
-trainTargets = torch.rand(32, 1, height, width)
-trainTargets = trainTargets:cuda()
-outputs = model:forward(trainInputs)
-f = criterion:forward(outputs, trainTargets)
+for i=1,epochs do
+   model:training()
+   trainAccu, time = coco.model_train_batch(model, criterion, parameters,
+                                      gradParameters, trainData, sampleSize,
+                                      optimMethod,
+                                      optimState, batchSize, i, confusion,
+                                      trainLogger, normGradient, useCuda,
+                                      useBce, displayProgress, bceThresh,
+                                      imageLevel, labelSize, preprocessor)
+   -- logging
+   print(previous_train_accu, trainAccu)
+   previous_train_accu = trainAccu
 
-df_do = criterion:backward(outputs, trainTargets)
-model:backward(trainInputs, df_do)
+   --[[
+   model:evaluate()
+   model_test_gpu_batch(model, validData, sampleSize, batchSize, confusion,
+                  deviceId, testLogger, setDevice, useBce, bceThresh,
+                  displayProgress, imageLevel)
+
+   testAccu = confusion.totalValid
+   print(best_test_accu, testAccu)
+   if best_test_accu < testAccu then
+      earlyStopCount = 0
+      best_test_accu = testAccu
+      best_test_model = model:clone()
+   else
+      earlyStopCount = earlyStopCount + 1
+   end
+   print("EarlyStopCount: "..tostring(earlyStopCount))
+   if earlyStopCount >= earlyStopThresh then
+      print("Early stopping")
+      break
+   end
+   --]]
+end
