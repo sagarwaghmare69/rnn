@@ -182,6 +182,7 @@ earlyStopCount = 0
 
 for epoch=1, epochs do
    -- Single training epoch
+   print("Epoch: " .. tostring(epoch))
    trainLoss = 0
    confusion:zero()
    model:training()
@@ -303,3 +304,4 @@ end
 confusion:updateValids()
 print("Best validation model TestSet confusion:")
 print(confusion)
+print("Model saved at: " .. modelPath)
