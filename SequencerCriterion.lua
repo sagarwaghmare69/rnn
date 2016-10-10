@@ -8,7 +8,7 @@
 ------------------------------------------------------------------------
 local SequencerCriterion, parent = torch.class('nn.SequencerCriterion', 'nn.Criterion')
 
-function SequencerCriterion:__init(criterion)
+function SequencerCriterion:__init(criterion, sizeAverage)
    parent.__init(self)
    self.criterion = criterion
    if torch.isTypeOf(criterion, 'nn.ModuleCriterion') then
@@ -16,6 +16,11 @@ function SequencerCriterion:__init(criterion)
          "Instead, try the other way around : "..
          "ModuleCriterion decorates a SequencerCriterion. "..
          "Its modules can also be similarly decorated with a Sequencer.")
+   end
+   if sizeAverage ~= nil then
+      self.sizeAverage = sizeAverage
+   else
+      self.sizeAverage = false
    end
    self.clones = {}
    self.gradInput = {}
@@ -50,11 +55,16 @@ function SequencerCriterion:updateOutput(input, target)
       self.output = self.output + criterion:forward(input[i], target[i])
    end
    
+   if self.sizeAverage then
+      self.output = self.output / nStep
+   end
+
    return self.output
 end
 
 function SequencerCriterion:updateGradInput(input, target)
    self.gradInput = {}
+   local nStep
    if torch.isTensor(input) then
       assert(torch.isTensor(target), "expecting target Tensor since input is a Tensor")
       assert(target:size(1) == input:size(1), "target should have as many elements as input")
@@ -69,6 +79,10 @@ function SequencerCriterion:updateGradInput(input, target)
    for i=1,nStep do
       local criterion = self:getStepCriterion(i)
       tableGradInput[i] = criterion:backward(input[i], target[i])
+      
+      if self.sizeAverage then
+         tableGradInput[i]:div(nStep)
+      end
    end
    
    if torch.isTensor(input) then
